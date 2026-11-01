@@ -1,17 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createApp } from '../dist/app.js';
+import { createHttpApp } from '../dist/http.js';
+import { signIn } from './oauth-client.mjs';
 
 test('MCP authenticates, redacts credentials, limits procedures and forwards mutations',async()=>{
   process.env.DOKPLOY_MANAGER_TOKEN='mcp-test-secret';
   const writes=[];
-  const app=createApp({dokploy:{getProjects:async()=>[{name:'Test',environments:[{name:'production',applications:[{applicationId:'app-1',name:'App',env:'PASSWORD=secret'}]}]}],dokployQuery:async()=>({name:'App',env:'TOKEN=never-return\nPORT=3000',password:'secret',nested:{apiKey:'secret'}}),dokployMutate:async(p,i)=>{writes.push([p,i]);return true;},getRuntimeLogs:async(id,tail)=>({id,tail,logs:'hello'})}});
-  async function rpc(method,params={},auth='Bearer mcp-test-secret'){
-    const r=await app.request('http://localhost/mcp',{method:'POST',headers:{Authorization:auth,Accept:'application/json, text/event-stream','Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
+  const app=createHttpApp({ownerKey:'owner-test-key',origin:'https://dokploy-manager.etdofresh.com',dokploy:{getProjects:async()=>[{name:'Test',environments:[{name:'production',applications:[{applicationId:'app-1',name:'App',env:'PASSWORD=secret'}]}]}],dokployQuery:async()=>({name:'App',env:'TOKEN=never-return\nPORT=3000',password:'secret',nested:{apiKey:'secret'}}),dokployMutate:async(p,i)=>{writes.push([p,i]);return true;},getRuntimeLogs:async(id,tail)=>({id,tail,logs:'hello'})}});
+  const server=app.listen(0,'0.0.0.0');await new Promise(r=>server.once('listening',r));
+  const base=`http://127.0.0.1:${server.address().port}`;
+  const {tokens}=await signIn({base,origin:'https://dokploy-manager.etdofresh.com',name:'dokploy',scope:'dokploy.manage',ownerKey:'owner-test-key'});
+  async function rpc(method,params={},auth='Bearer '+tokens.access_token){
+    const r=await fetch(base+'/mcp',{method:'POST',headers:{Authorization:auth,Accept:'application/json, text/event-stream','Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
     return {status:r.status,body:await r.json()};
   }
   try {
     assert.equal((await rpc('tools/list',{},'bad')).status,401);
+    assert.equal((await rpc('tools/list',{},'Bearer mcp-test-secret')).status,401);
     assert.equal((await rpc('tools/list')).body.result.tools.length,4);
     const result=await rpc('tools/call',{name:'dokploy_query',arguments:{procedure:'application.one',input:{applicationId:'app-1'}}});
     const text=result.body.result.content[0].text;
@@ -22,5 +27,5 @@ test('MCP authenticates, redacts credentials, limits procedures and forwards mut
     assert.ok(!mutation.body.result.isError);assert.deepEqual(writes,[['application.deploy',{applicationId:'app-1'}]]);
     const logs=await rpc('tools/call',{name:'dokploy_logs',arguments:{application_id:'app-1',kind:'runtime',tail:20}});
     assert.deepEqual(JSON.parse(logs.body.result.content[0].text),{id:'app-1',tail:'20',logs:'hello'});
-  } finally {delete process.env.DOKPLOY_MANAGER_TOKEN;}
+  } finally {delete process.env.DOKPLOY_MANAGER_TOKEN;server.closeAllConnections();await new Promise(r=>server.close(r));}
 });

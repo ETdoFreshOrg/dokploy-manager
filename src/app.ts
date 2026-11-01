@@ -27,8 +27,9 @@ type DokployDependencies = {
   listRuntimeContainers: typeof listRuntimeContainers;
 };
 
-type CreateAppOptions = {
+export type CreateAppOptions = {
   dokploy?: Partial<DokployDependencies>;
+  mcpAuth?: { enabled: boolean; challenge: string; verifyAccessToken(token: string): Promise<unknown> };
 };
 
 function getManagerToken(): string {
@@ -485,6 +486,6 @@ export function createApp(options: CreateAppOptions = {}) {
     }
   });
 
-  installMcp(app, deps, getManagerToken);
+  installMcp(app, deps, options.mcpAuth);
   return app;
 }

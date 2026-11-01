@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'node:crypto';
 import type { Hono } from 'hono';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
@@ -20,13 +19,13 @@ export function redact(value: any, key = ''): any {
   if (/^(env|buildArgs|buildSecrets)$/i.test(key)) {
     return typeof value === 'string' ? value.split('\n').filter(x => /^[A-Za-z_][A-Za-z0-9_]*=/.test(x)).map(x => x.split('=', 1)[0]) : '[redacted]';
   }
-  if (/(password|secret|token|private.?key|api.?key|ssh.?key|connection.?string|database.?url|authorization)/i.test(key)) return '[redacted]';
+  if (/(password|secret|token|owner.?key|private.?key|api.?key|ssh.?key|connection.?string|database.?url|authorization)/i.test(key)) return '[redacted]';
   if (Array.isArray(value)) return value.map(v => redact(v));
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k, redact(v,k)]));
   if (typeof value === 'string') {
     let text = value;
     // Never return the server's own control-plane credentials, even in an error/log.
-    for (const name of ['DOKPLOY_MANAGER_TOKEN','DOKPLOY_EDITOR_TOKEN','DOKPLOY_VIEWER_TOKEN','DOKPLOY_TOKEN']) {
+    for (const name of ['DOKPLOY_MANAGER_TOKEN','DOKPLOY_EDITOR_TOKEN','DOKPLOY_VIEWER_TOKEN','DOKPLOY_TOKEN','MCP_OWNER_KEY']) {
       const secret = process.env[name];
       if (secret) text = text.split(secret).join('[redacted]');
     }
@@ -35,17 +34,13 @@ export function redact(value: any, key = ''): any {
   return value;
 }
 
-function authorized(header: string | undefined, token: string) {
-  const actual = Buffer.from(header || '');
-  const expected = Buffer.from('Bearer ' + token);
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
-}
-
-export function installMcp(app: Hono, deps: any, getToken: () => string) {
+export function installMcp(app: Hono, deps: any, auth?: { enabled: boolean; challenge: string; verifyAccessToken(token: string): Promise<unknown> }) {
   app.all('/mcp', async c => {
-    const token = getToken();
-    if (!token) return c.json({ error: 'MCP authentication is not configured' }, 503);
-    if (!authorized(c.req.header('authorization'), token)) return c.json({ error: 'Unauthorized' }, 401);
+    c.header('Cache-Control', 'no-store');
+    if (!auth?.enabled) return c.json({ error: 'MCP owner-key OAuth is not configured' }, 503);
+    const match = /^Bearer (\S+)$/.exec(c.req.header('authorization') || '');
+    try { if (!match) throw new Error('Missing token'); await auth.verifyAccessToken(match[1]); }
+    catch { c.header('WWW-Authenticate', auth.challenge); return c.json({ error: 'OAuth authorization required' }, 401); }
     const origin = c.req.header('origin');
     if (origin && origin !== (process.env.PUBLIC_ORIGIN || 'https://dokploy-manager.etdofresh.com')) return c.json({ error: 'Origin not allowed' }, 403);
     if (c.req.method !== 'POST') return c.json({ error: 'Use POST for stateless Streamable HTTP' }, 405);
