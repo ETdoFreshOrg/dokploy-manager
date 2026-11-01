@@ -27,3 +27,14 @@ npm run build
 npm test
 npm run dev
 ```
+# MCP
+
+`https://dokploy-manager.etdofresh.com/mcp` provides authenticated stateless
+Streamable HTTP. Use `Authorization: Bearer <DOKPLOY_MANAGER_TOKEN>`.
+`PUBLIC_ORIGIN` may override the browser-origin allowlist.
+
+Tools: `dokploy_list_services`, `dokploy_query`, `dokploy_mutate`, and
+`dokploy_logs`. Queries and mutations use explicit procedure allowlists;
+application/project/database deletion is excluded. Reads redact environment
+values and credential fields. Mutations should only execute changes requested
+by the user. The existing REST API and UI continue to work.

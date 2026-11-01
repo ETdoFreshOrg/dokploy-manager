@@ -10,6 +10,7 @@ import {
 } from "./dokploy.js";
 import { getDeployLogs, getRuntimeLogs, listRuntimeContainers } from "./logs.js";
 import { html } from "./ui.js";
+import { installMcp } from "./mcp.js";
 
 type AnyRecord = Record<string, any>;
 
@@ -484,5 +485,6 @@ export function createApp(options: CreateAppOptions = {}) {
     }
   });
 
+  installMcp(app, deps, getManagerToken);
   return app;
 }
