@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHttpApp } from '../dist/http.js';
-import { signIn } from './oauth-client.mjs';
+import { begin, signIn } from './oauth-client.mjs';
+import { ETBOT_CLIENT } from '../oauth/service.mjs';
 
 test('MCP authenticates, redacts credentials, limits procedures and forwards mutations',async()=>{
   process.env.DOKPLOY_MANAGER_TOKEN='mcp-test-secret';
@@ -28,4 +29,17 @@ test('MCP authenticates, redacts credentials, limits procedures and forwards mut
     const logs=await rpc('tools/call',{name:'dokploy_logs',arguments:{application_id:'app-1',kind:'runtime',tail:20}});
     assert.deepEqual(JSON.parse(logs.body.result.content[0].text),{id:'app-1',tail:'20',logs:'hello'});
   } finally {delete process.env.DOKPLOY_MANAGER_TOKEN;server.closeAllConnections();await new Promise(r=>server.close(r));}
+});
+
+test('ET Bot reaches owner consent at its one registered callback only',async()=>{
+  const origin='https://dokploy-manager.etdofresh.com';
+  const app=createHttpApp({ownerKey:'owner-test-key',origin,dokploy:{}});
+  const server=app.listen(0,'0.0.0.0');await new Promise(r=>server.once('listening',r));
+  const base=`http://127.0.0.1:${server.address().port}`,etbot={base,origin,name:'dokploy',scope:'dokploy.manage',client_id:ETBOT_CLIENT.client_id};
+  try {
+    const page=await begin({...etbot,redirect_uri:ETBOT_CLIENT.redirect_uris[0]});
+    assert.equal(page.page.status,200);assert.match(page.html,/Authorize ET Bot/);
+    for(const redirect_uri of ['https://etbot.etdofresh.com/api/connectors/oauth/other','https://evil.test/api/connectors/oauth/callback'])
+      assert.equal((await begin({...etbot,redirect_uri})).page.status,400,redirect_uri);
+  } finally {server.closeAllConnections();await new Promise(r=>server.close(r));}
 });

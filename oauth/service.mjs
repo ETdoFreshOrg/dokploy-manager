@@ -13,6 +13,11 @@ const deps = { express, rateLimit, mcpAuthRouter, mcpAuthMetadataRouter, createO
   handlers: { authorizationHandler, tokenHandler, revocationHandler },
   errors: { InvalidGrantError, InvalidScopeError, InvalidTargetError, InvalidTokenError } };
 
+// ET Bot (etbot.etdofresh.com) names itself by its client metadata URL. It is pre-registered with its
+// one exact callback, so the document is never fetched and no other ET Bot callback is accepted.
+export const ETBOT_CLIENT = { client_id: 'https://etbot.etdofresh.com/oauth/client-metadata.json', client_name: 'ET Bot',
+  redirect_uris: ['https://etbot.etdofresh.com/api/connectors/oauth/callback'] };
+
 export function installMcpOAuth(app, { name, origin, ownerKey, scope, description, store = new OAuthStore(), ...options }) {
   if (new URL(origin).origin !== origin) throw new Error('MCP public origin must be a bare origin');
   const challenge = `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp", scope="${scope}"`;
@@ -26,7 +31,7 @@ export function installMcpOAuth(app, { name, origin, ownerKey, scope, descriptio
   }
   const oauth = installOAuth(app, { deps, ownerKey, origin, oauthPath: '/mcp/oauth',
     scopes: [scope], defaultScopes: [scope], resourceName: name, claude: true, chatgpt: true,
-    clients: [{ client_id: name + '-claude', client_name: 'Claude / Codex', redirect_uris: claudeRedirects }],
+    clients: [{ client_id: name + '-claude', client_name: 'Claude / Codex', redirect_uris: claudeRedirects }, ETBOT_CLIENT],
     renderConsent: defaultConsentPage({ title: 'Authorize ' + name,
       describe: () => `<p>${escape(description)}</p><p>Permission: <strong>${escape(scope)}</strong>.</p>`,
       ownerKeyLabel: name + ' MCP owner key', ownerKeyNote: 'The owner key stays on this authorization page. The connecting application receives revocable OAuth tokens.',
