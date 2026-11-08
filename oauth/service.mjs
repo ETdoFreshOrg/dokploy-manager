@@ -31,7 +31,7 @@ export function installMcpOAuth(app, { name, origin, ownerKey, scope, descriptio
   }
   const oauth = installOAuth(app, { deps, ownerKey, origin, oauthPath: '/mcp/oauth',
     scopes: [scope], defaultScopes: [scope], resourceName: name, claude: true, chatgpt: true,
-    clients: [{ client_id: name + '-claude', client_name: 'Claude / Codex', redirect_uris: claudeRedirects }, ETBOT_CLIENT],
+    clients: [{"client_id":"1mcp-dokploy","client_name":"ET 1MCP","redirect_uris":["https://1mcp.etdofresh.com/oauth/callback/dokploy"]},{ client_id: name + '-claude', client_name: 'Claude / Codex', redirect_uris: claudeRedirects }, ETBOT_CLIENT],
     renderConsent: defaultConsentPage({ title: 'Authorize ' + name,
       describe: () => `<p>${escape(description)}</p><p>Permission: <strong>${escape(scope)}</strong>.</p>`,
       ownerKeyLabel: name + ' MCP owner key', ownerKeyNote: 'The owner key stays on this authorization page. The connecting application receives revocable OAuth tokens.',
