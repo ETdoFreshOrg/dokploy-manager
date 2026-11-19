@@ -1,7 +1,9 @@
-import { readFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { getApplication, getApplicationDeployments } from "./dokploy.js";
+import { dokployLogQuery } from "./dokploy.js";
+import { boundedLogOutput } from "./log-output.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -45,18 +47,32 @@ function parseTail(rawTail: string | undefined, fallback = 100): number {
   return Math.min(parsed, 10000);
 }
 
-async function readTextFileIfPresent(path: string | undefined): Promise<string | null> {
+async function readTextFileIfPresent(path: string | null) {
   if (!path) return null;
   try {
-    return await readFile(path, "utf8");
+    const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const info = await file.stat();
+      if (!info.isFile()) return null;
+      const buffer = Buffer.alloc(256 * 1024);
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+      const truncated = bytesRead < info.size;
+      const raw = buffer.subarray(0, bytesRead).toString("utf8");
+      const output = boundedLogOutput(truncated ? raw.slice(0, raw.lastIndexOf("\n") + 1) : raw);
+      return { ...output, truncated: truncated || output.truncated };
+    } finally {
+      await file.close();
+    }
   } catch {
     return null;
   }
 }
 
+const dockerLimits = { timeout: 8_000, maxBuffer: 1024 * 1024, killSignal: "SIGKILL" as const };
+
 async function inspectDockerContainers(): Promise<DockerInspection> {
   try {
-    const { stdout } = await execFileAsync("docker", ["ps", "-a", "--format", "{{json .}}"]);
+    const { stdout } = await execFileAsync("docker", ["ps", "-a", "--format", "{{json .}}"], dockerLimits);
     const containers = stdout
       .split("\n")
       .map((line) => line.trim())
@@ -68,7 +84,7 @@ async function inspectDockerContainers(): Promise<DockerInspection> {
         image: row.Image || undefined,
         status: row.Status || undefined,
       }))
-      .filter((container) => container.id && container.name);
+      .filter((container) => /^(?:[a-f0-9]{12}|[a-f0-9]{64})$/.test(container.id) && container.name);
     return {
       available: true,
       containers,
@@ -127,7 +143,7 @@ function findMatchingContainer(containers: RuntimeContainer[], candidates: strin
 }
 
 export async function getDeployLogs(applicationId: string) {
-  const deployments = asArray(await getApplicationDeployments(applicationId));
+  const deployments = asArray(await dokployLogQuery("deployment.all", { applicationId }, AbortSignal.timeout(10_000)));
   if (!deployments.length) {
     return {
       applicationId,
@@ -142,7 +158,7 @@ export async function getDeployLogs(applicationId: string) {
 
   const latest = asRecord(deployments[0]);
   const logPath = typeof latest.logPath === "string" ? latest.logPath : null;
-  const logContent = await readTextFileIfPresent(logPath || undefined);
+  const output = await readTextFileIfPresent(logPath);
 
   return {
     applicationId,
@@ -150,15 +166,17 @@ export async function getDeployLogs(applicationId: string) {
     status: latest.status ?? null,
     createdAt: latest.createdAt ?? null,
     logPath,
-    logs: logContent || (logPath ? `Could not read log file: ${logPath}` : "No log content available"),
-    source: logContent ? "filesystem" : "none",
+    logs: output?.logs || (logPath && !output ? "Could not read deployment log file" : "No log content available"),
+    source: output ? "filesystem" : "none",
+    ...(output?.truncated ? { truncated: true } : {}),
   };
 }
 
 export async function getRuntimeLogs(applicationId: string, rawTail?: string) {
   const tail = parseTail(rawTail, 100);
-  const application = asRecord(await getApplication(applicationId));
-  const deployments = asArray(await getApplicationDeployments(applicationId));
+  const signal = AbortSignal.timeout(10_000);
+  const application = asRecord(await dokployLogQuery("application.one", { applicationId }, signal));
+  const deployments = asArray(await dokployLogQuery("deployment.all", { applicationId }, signal));
   const latestDeployment = deployments.length ? asRecord(deployments[0]) : undefined;
   const candidates = extractContainerCandidates(application, latestDeployment);
   const docker = await inspectDockerContainers();
@@ -185,22 +203,23 @@ export async function getRuntimeLogs(applicationId: string, rawTail?: string) {
   }
 
   try {
-    const { stdout, stderr } = await execFileAsync("docker", ["logs", "--tail", String(tail), matchedContainer.id]);
+    const { stdout, stderr } = await execFileAsync("docker", ["logs", "--tail", String(tail), matchedContainer.id], dockerLimits);
+    const output = boundedLogOutput(stdout || stderr, tail);
     return {
       applicationId,
       tail,
       source: "docker-cli",
-      logs: stdout || stderr || "No runtime log output available",
+      logs: output.logs || (output.truncated ? "" : "No runtime log output available"),
+      ...(output.truncated ? { truncated: true } : {}),
       candidates,
       container: matchedContainer,
     };
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
     return {
       applicationId,
       tail,
       source: "docker-cli-error",
-      logs: `Runtime logs unavailable: ${detail}`,
+      logs: "Runtime logs unavailable. Docker could not read the container within the time and size limits.",
       candidates,
       container: matchedContainer,
     };

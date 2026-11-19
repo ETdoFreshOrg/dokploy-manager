@@ -20,20 +20,23 @@ function requireDokployConfig() {
   return { url, token };
 }
 
-export async function dokployQuery(procedure: string, input: JsonMap = {}): Promise<any> {
+function fetchQuery(procedure: string, input: JsonMap, signal?: AbortSignal) {
   const { url: dokployUrl, token } = requireDokployConfig();
   const wrapped = Object.keys(input).length > 0 ? { json: input } : input;
-  const url = `${dokployUrl}/api/trpc/${procedure}?input=${encodeURIComponent(JSON.stringify(wrapped))}`;
-
-  const res = await fetch(url, {
+  const url = `${dokployUrl.replace(/\/$/, "")}/api/trpc/${procedure}?input=${encodeURIComponent(JSON.stringify(wrapped))}`;
+  return fetch(url, {
     method: "GET",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
       "x-api-key": token,
     },
+    ...(signal ? { signal, redirect: "error" } : {}),
   });
+}
 
+export async function dokployQuery(procedure: string, input: JsonMap = {}): Promise<any> {
+  const res = await fetchQuery(procedure, input);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Dokploy ${procedure} failed (${res.status}): ${text}`);
@@ -42,6 +45,53 @@ export async function dokployQuery(procedure: string, input: JsonMap = {}): Prom
   const json = await res.json();
   const data = json?.result?.data;
   return data?.json ?? data ?? json;
+}
+
+type LogProcedure =
+  | "compose.one" | "docker.getContainersByAppNameMatch" | "compose.readLogs"
+  | "application.one" | "deployment.all";
+
+export class LogQueryError extends Error {
+  constructor(readonly reason: "http" | "size" | "invalid", readonly status?: number) {
+    super("Dokploy log query failed");
+  }
+}
+
+// Keep upstream log and metadata reads bounded, even for chunked or compressed responses.
+export async function dokployLogQuery(procedure: LogProcedure, input: JsonMap, signal: AbortSignal): Promise<unknown> {
+  const response = await fetchQuery(procedure, input, signal);
+  if (!response.ok) {
+    void response.body?.cancel().catch(() => {});
+    throw new LogQueryError("http", response.status);
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new LogQueryError("invalid");
+  const limit = 2 * 1024 * 1024;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        void reader.cancel().catch(() => {});
+        throw new LogQueryError("size");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  try {
+    const result = JSON.parse(Buffer.concat(chunks, size).toString("utf8"))?.result;
+    if (!result || !Object.prototype.hasOwnProperty.call(result, "data")) throw new LogQueryError("invalid");
+    const data = result.data;
+    return data && typeof data === "object" && Object.prototype.hasOwnProperty.call(data, "json") ? data.json : data;
+  } catch {
+    throw new LogQueryError("invalid");
+  }
 }
 
 export async function dokployMutate(procedure: string, input: JsonMap = {}): Promise<any> {

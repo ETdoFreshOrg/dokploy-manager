@@ -54,3 +54,47 @@ reuse or explicit revocation invalidates the consent. Only token hashes are stor
 Discover OAuth at `/.well-known/oauth-authorization-server` and
 `/.well-known/oauth-protected-resource/mcp`. Consent and token endpoints are under
 `/mcp/oauth`. Claude and ChatGPT metadata clients are supported.
+
+## Runtime logs through 1MCP
+
+Use `dokploy_1mcp_dokploy_logs` with an existing Application ID or a Docker
+Compose ID. For example, the following arguments select the Browserless MCP
+service when it has a single container with a standard Compose name.
+
+```json
+{"compose_id":"<compose ID from dokploy_list_services>","kind":"runtime","service":"mcp","tail":100}
+```
+
+Use `container` with the exact listed container name or Docker ID for replicas
+or custom container names. With both selectors, the container must match the
+service inferred from its standard Compose name. With neither, a single
+container must be present. For the Chrome desktop, select `desktop` when it
+uses a standard Compose name. The response gives the selected container's ID,
+name and state, plus its service when inferable. Log text retains Docker
+timestamps and request or correlation IDs already present in the output.
+
+The Manager resolves the deployment server with `compose.one`, lists
+project-scoped containers with `docker.getContainersByAppNameMatch`, and reads
+the selected container with `compose.readLogs`. Dokploy checks container
+ownership again when reading the logs. These are GET requests with the existing
+Dokploy API key. Swarm task logs require a different endpoint. The deployment
+log option and Application runtime option still use `application_id`.
+
+Compose reads have a 10-second deadline and a 2 MiB limit per upstream
+response. The tool accepts a tail of 1–1,000 lines and limits returned log text
+to 24 KiB. The `truncated` flag marks output clipped by the Manager. The reader
+redacts recognized credentials and strips terminal controls. Treat rendered logs
+as sensitive and untrusted because applications can print arbitrary text.
+
+A structured tool error with `stage: "target"` identifies a selection issue,
+such as `container_not_found` or `container_ambiguous`. An empty Dokploy
+inventory can also mean the target server could not list its containers.
+`stage: "dokploy"` identifies a backend failure, with a procedure and HTTP
+status when available. A 1MCP protocol or transport error before the Manager
+returns a tool result indicates a forwarding failure. In the isolated 1MCP
+v0.40.0 test, a Manager HTTP 503 appears as JSON-RPC error `-32603`.
+
+Run `npm test` for local regressions. Set `ONE_MCP_TEST_BIN` to the absolute
+path of a local 1MCP v0.40.0 executable to include the loopback gateway test.
+It uses a synthetic OAuth grant, a Dokploy API fixture, a Docker CLI fixture,
+and a temporary deployment log.

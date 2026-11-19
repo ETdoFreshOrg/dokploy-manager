@@ -11,6 +11,7 @@ import {
 import { getDeployLogs, getRuntimeLogs, listRuntimeContainers } from "./logs.js";
 import { html } from "./ui.js";
 import { installMcp } from "./mcp.js";
+import { getComposeRuntimeLogs } from "./compose-logs.js";
 
 type AnyRecord = Record<string, any>;
 
@@ -24,6 +25,7 @@ type DokployDependencies = {
   getServers: typeof getServers;
   getDeployLogs: typeof getDeployLogs;
   getRuntimeLogs: typeof getRuntimeLogs;
+  getComposeRuntimeLogs: typeof getComposeRuntimeLogs;
   listRuntimeContainers: typeof listRuntimeContainers;
 };
 
@@ -183,6 +185,7 @@ export function createApp(options: CreateAppOptions = {}) {
     getServers,
     getDeployLogs,
     getRuntimeLogs,
+    getComposeRuntimeLogs,
     listRuntimeContainers,
     ...options.dokploy,
   };
